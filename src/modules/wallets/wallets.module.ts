@@ -6,6 +6,7 @@ import { ReconcileWalletUseCase } from './application/reconcile-wallet.use-case'
 import { WAGER_TRANSACTION_REPOSITORY } from '../wagering/application/ports/wager-transaction.repository';
 import { OUTBOX_REPOSITORY } from '../messaging/application/ports/outbox.repository';
 import { UNIT_OF_WORK } from '../../shared/application/ports/unit-of-work';
+import { WalletsController } from './infrastructure/http/wallets.controller';
 
 // use cases are assembled via factories — the application layer carries no
 // Nest decorators
@@ -29,6 +30,7 @@ const reconcileWalletUseCase: Provider = {
 };
 
 @Module({
+  controllers: [WalletsController],
   providers: [createWalletUseCase, reconcileWalletUseCase],
   exports: [CreateWalletUseCase, ReconcileWalletUseCase],
 })

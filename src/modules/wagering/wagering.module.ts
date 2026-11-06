@@ -7,6 +7,7 @@ import { UNIT_OF_WORK } from '../../shared/application/ports/unit-of-work';
 import { WagerTransactionApplier } from './application/wager-transaction-applier';
 import { SubmitWagerTransactionUseCase } from './application/submit-wager-transaction.use-case';
 import { ReprocessPendingReferencesUseCase } from './application/reprocess-pending-references.use-case';
+import { WageringController } from './infrastructure/http/wagering.controller';
 
 const applier: Provider = {
   provide: WagerTransactionApplier,
@@ -30,6 +31,7 @@ const reprocessPendingReferencesUseCase: Provider = {
 };
 
 @Module({
+  controllers: [WageringController],
   providers: [applier, submitWagerTransactionUseCase, reprocessPendingReferencesUseCase],
   exports: [WagerTransactionApplier, SubmitWagerTransactionUseCase, ReprocessPendingReferencesUseCase],
 })
