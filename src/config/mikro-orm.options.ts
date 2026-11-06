@@ -1,5 +1,6 @@
 import { Migrator } from '@mikro-orm/migrations';
 import { PostgreSqlDriver, type Options } from '@mikro-orm/postgresql';
+import { ENTITIES } from '../database/entities';
 
 export interface MikroOrmOptionsInput {
   databaseUrl?: string;
@@ -17,14 +18,12 @@ export function buildMikroOrmOptions(input: MikroOrmOptionsInput = {}): Options 
   return {
     driver: PostgreSqlDriver,
     clientUrl: input.databaseUrl ?? DEFAULT_DATABASE_URL,
-    entities: [],
-    // Entities are registered explicitly (never via glob scanning), so an
-    // empty list during bootstrap phases is intentional, not a misconfiguration.
-    discovery: { warnWhenNoEntities: false },
+    entities: ENTITIES,
     extensions: [Migrator],
     migrations: {
       path: 'migrations',
-      snapshot: true,
+      // migrations are hand-written (versioned + reversible); no diff snapshot
+      snapshot: false,
       transactional: true,
       allOrNothing: true,
     },

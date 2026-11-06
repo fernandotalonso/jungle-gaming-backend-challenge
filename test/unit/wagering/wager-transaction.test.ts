@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { CreateWagerTransactionProps } from '../../../src/modules/wagering/domain/wager-transaction';
-import { WagerTransaction, WagerTransactionKind, WagerTransactionStatus } from '../../../src/modules/wagering/domain/wager-transaction';
+import {
+  MAX_REFERENCE_ATTEMPTS,
+  WagerTransaction,
+  WagerTransactionKind,
+  WagerTransactionStatus,
+} from '../../../src/modules/wagering/domain/wager-transaction';
 import { FailureCode } from '../../../src/modules/wagering/domain/failure-code';
 import {
   InvalidAmountError,
@@ -130,6 +135,29 @@ describe('WagerTransaction transitions', () => {
     expect(tx.status).toBe(WagerTransactionStatus.Rejected);
     expect(tx.failureCode).toBe(FailureCode.INSUFFICIENT_FUNDS);
     expect(tx.isTerminal()).toBe(true);
+  });
+
+  it('scheduleReferenceCheck applies exponential backoff with cap', () => {
+    const tx = build(WagerTransactionKind.Refund, { referenceExternalTransactionId: 'ref-1' });
+    tx.markPendingReference();
+
+    let now = new Date('2026-11-06T10:00:00Z');
+    const expectedDelaysMs = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000];
+
+    for (const [index, expectedDelay] of expectedDelaysMs.entries()) {
+      tx.scheduleReferenceCheck(now);
+      expect(tx.referenceAttempts).toBe(index + 1);
+      expect(tx.nextReferenceCheckAt!.getTime() - now.getTime()).toBe(expectedDelay);
+      now = tx.nextReferenceCheckAt!;
+    }
+    expect(tx.referenceAttempts).toBe(expectedDelaysMs.length);
+    // policy constant consumed by the reprocessing worker (rejects when reached)
+    expect(MAX_REFERENCE_ATTEMPTS).toBe(10);
+  });
+
+  it('scheduleReferenceCheck requires PENDING_REFERENCE', () => {
+    const tx = build(WagerTransactionKind.Bet);
+    expect(() => tx.scheduleReferenceCheck(new Date())).toThrow(InvalidTransactionStateError);
   });
 
   it('PENDING -> FAILED carries a failureCode', () => {

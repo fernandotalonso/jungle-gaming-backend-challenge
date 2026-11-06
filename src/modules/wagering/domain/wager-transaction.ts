@@ -28,6 +28,11 @@ export enum WagerTransactionStatus {
   Failed = 'FAILED', // permanent infrastructure error (terminal, auditable)
 }
 
+/** Pending-reference worker policy (README 7.1): exponential backoff, capped, with attempt limit. */
+export const REFERENCE_RETRY_BASE_MS = 1_000;
+export const REFERENCE_RETRY_MAX_MS = 60_000;
+export const MAX_REFERENCE_ATTEMPTS = 10;
+
 export interface CreateWagerTransactionProps {
   id: string;
   providerId: string;
@@ -62,6 +67,8 @@ export interface WagerTransactionState {
   referenceTransactionId?: string | null;
   failureCode?: FailureCode | string | null;
   processedAt?: DateLike | null;
+  referenceAttempts?: number | null;
+  nextReferenceCheckAt?: DateLike | null;
 }
 
 /**
@@ -91,6 +98,8 @@ export class WagerTransaction {
     private _referenceTransactionId?: string,
     private _failureCode?: FailureCode,
     private _processedAt?: Date,
+    private _referenceAttempts: number = 0,
+    private _nextReferenceCheckAt?: Date,
   ) {}
 
   /** Born PENDING. Rejects the internal OPENING kind and validates reference requirements. */
@@ -167,6 +176,8 @@ export class WagerTransaction {
     const status = state.status as WagerTransactionStatus;
     const referenceTransactionId = state.referenceTransactionId ?? undefined;
     const processedAt = state.processedAt == null ? undefined : toDate(state.processedAt);
+    const nextReferenceCheckAt =
+      state.nextReferenceCheckAt == null ? undefined : toDate(state.nextReferenceCheckAt);
 
     return new WagerTransaction(
       state.id,
@@ -186,6 +197,8 @@ export class WagerTransaction {
       referenceTransactionId,
       (state.failureCode as FailureCode) ?? undefined,
       processedAt,
+      state.referenceAttempts ?? 0,
+      nextReferenceCheckAt,
     );
   }
 
@@ -205,6 +218,14 @@ export class WagerTransaction {
     return this._processedAt;
   }
 
+  get referenceAttempts(): number {
+    return this._referenceAttempts;
+  }
+
+  get nextReferenceCheckAt(): Date | undefined {
+    return this._nextReferenceCheckAt;
+  }
+
   // ---- transitions (all throw InvalidTransactionStateError from terminal states) ----
 
   markProcessed(referenceTransactionId: string | undefined, at: Date): void {
@@ -222,6 +243,25 @@ export class WagerTransaction {
       );
     }
     this._status = WagerTransactionStatus.PendingReference;
+  }
+
+  /**
+   * Schedules the next reference check with exponential backoff (worker policy
+   * in README 7.1). Only valid while waiting for the reference. When attempts
+   * reach MAX_REFERENCE_ATTEMPTS the use case must reject the transaction.
+   */
+  scheduleReferenceCheck(now: Date): void {
+    if (this._status !== WagerTransactionStatus.PendingReference) {
+      throw new InvalidTransactionStateError(
+        `scheduleReferenceCheck requires PENDING_REFERENCE, got ${this._status}`,
+      );
+    }
+    this._referenceAttempts += 1;
+    const delay = Math.min(
+      REFERENCE_RETRY_BASE_MS * 2 ** (this._referenceAttempts - 1),
+      REFERENCE_RETRY_MAX_MS,
+    );
+    this._nextReferenceCheckAt = new Date(now.getTime() + delay);
   }
 
   reject(code: FailureCode): void {
