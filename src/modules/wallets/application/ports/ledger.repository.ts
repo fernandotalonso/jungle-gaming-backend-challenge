@@ -17,6 +17,10 @@ export interface LedgerRepository {
   insert(entry: WalletLedgerEntry, db: Db): Promise<void>;
   /** Chronological keyset pagination via stable opaque cursor. */
   listByWalletId(walletId: string, options: ListLedgerOptions, db?: Db): Promise<LedgerPage>;
+  /** The (at most one) entry produced by a transaction on a wallet. */
+  findByTransactionId(transactionId: string, db?: Db): Promise<WalletLedgerEntry | null>;
+  /** First entry of the wallet at or after `at` — used to reconstruct observed balances. */
+  findFirstEntryAfter(walletId: string, at: Date, db?: Db): Promise<WalletLedgerEntry | null>;
 }
 
 export const LEDGER_REPOSITORY = Symbol('LEDGER_REPOSITORY');

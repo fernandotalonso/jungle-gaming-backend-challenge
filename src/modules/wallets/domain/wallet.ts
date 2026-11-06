@@ -5,6 +5,7 @@ import {
   DomainError,
   InsufficientFundsError,
   InvalidAmountError,
+  InvalidWalletStateError,
 } from '../../../shared/domain/errors';
 import { LedgerDirection } from '../../../shared/domain/ledger-direction';
 import { Money, type MoneyProps } from '../../../shared/domain/money';
@@ -87,6 +88,26 @@ export class Wallet {
 
   get updatedAt(): Date {
     return this._updatedAt;
+  }
+
+  /**
+   * Ledger entry for the creation itself: balanceBefore 0 -> balanceAfter
+   * initial balance. Creation is a single state transition — version stays 1
+   * and the aggregate is not mutated. Only valid on a freshly opened wallet.
+   */
+  openingEntry(transactionId: string): WalletLedgerEntry {
+    if (this._version !== 1) {
+      throw new InvalidWalletStateError(`openingEntry is only valid on a newly opened wallet (version ${this._version})`);
+    }
+    return WalletLedgerEntry.create({
+      walletId: this.id,
+      transactionId,
+      direction: LedgerDirection.Credit,
+      money: this._balance,
+      balanceBefore: Money.zero(this.currency),
+      balanceAfter: this._balance,
+      createdAt: this.createdAt,
+    });
   }
 
   /** Applies a debit and returns the matching immutable ledger entry. */

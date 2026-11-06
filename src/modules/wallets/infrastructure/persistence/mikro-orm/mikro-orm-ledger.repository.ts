@@ -63,8 +63,7 @@ export class MikroOrmLedgerRepository implements LedgerRepository {
     await db.flush();
   }
 
-  async listByWalletId(
-    walletId: string,
+  async listByWalletId(    walletId: string,
     options: ListLedgerOptions,
     db?: Db,
   ): Promise<LedgerPage> {
@@ -100,6 +99,29 @@ export class MikroOrmLedgerRepository implements LedgerRepository {
       items,
       nextCursor: hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null,
     };
+  }
+
+  async findByTransactionId(transactionId: string, db?: Db): Promise<WalletLedgerEntry | null> {
+    const manager: Db = db ?? (this.orm.em.fork() as Db);
+    const rows = (await manager.execute(
+      'SELECT * FROM wallet_ledger_entries WHERE transaction_id = ? LIMIT 1',
+      [transactionId],
+      'all',
+    )) as LedgerRow[];
+    return rows.length > 0 ? rowToDomain(rows[0]!) : null;
+  }
+
+  async findFirstEntryAfter(walletId: string, at: Date, db?: Db): Promise<WalletLedgerEntry | null> {
+    const manager: Db = db ?? (this.orm.em.fork() as Db);
+    const rows = (await manager.execute(
+      `SELECT * FROM wallet_ledger_entries
+       WHERE wallet_id = ? AND created_at >= ?
+       ORDER BY created_at ASC, id ASC
+       LIMIT 1`,
+      [walletId, at],
+      'all',
+    )) as LedgerRow[];
+    return rows.length > 0 ? rowToDomain(rows[0]!) : null;
   }
 }
 

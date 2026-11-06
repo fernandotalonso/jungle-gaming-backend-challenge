@@ -163,4 +163,16 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
     )) as WagerTxRow[];
     return rows.map(rowToDomain);
   }
+
+  async findProcessedReversalFor(referenceTransactionId: string, db?: Db): Promise<WagerTransaction | null> {
+    const manager: Db = db ?? (this.orm.em.fork() as Db);
+    const rows = (await manager.execute(
+      `SELECT * FROM wager_transactions
+       WHERE reference_transaction_id = ? AND status = 'PROCESSED' AND kind IN ('REFUND', 'ROLLBACK')
+       LIMIT 1`,
+      [referenceTransactionId],
+      'all',
+    )) as WagerTxRow[];
+    return rows.length > 0 ? rowToDomain(rows[0]!) : null;
+  }
 }

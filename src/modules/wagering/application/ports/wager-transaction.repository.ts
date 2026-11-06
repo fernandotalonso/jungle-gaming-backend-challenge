@@ -9,6 +9,8 @@ export interface WagerTransactionRepository {
   findById(id: string, db?: Db): Promise<WagerTransaction | null>;
   findByIdempotencyKey(idempotencyKey: string, db?: Db): Promise<WagerTransaction | null>;
   findByProviderAndExternalId(providerId: string, externalTransactionId: string, db?: Db): Promise<WagerTransaction | null>;
+  /** Any PROCESSED reversal (REFUND/ROLLBACK) already pointing at the given transaction. */
+  findProcessedReversalFor(referenceTransactionId: string, db?: Db): Promise<WagerTransaction | null>;
   /** PENDING_REFERENCE transactions due for another check (backoff respected). Must run inside a transaction. */
   findPendingReferences(db: Db, now: Date, limit: number): Promise<WagerTransaction[]>;
 }

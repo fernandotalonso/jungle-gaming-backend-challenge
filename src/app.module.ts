@@ -3,6 +3,8 @@ import { ConfigModule } from '@nestjs/config';
 import { DatabaseModule } from './database/database.module';
 import { PersistenceModule } from './database/persistence.module';
 import { HealthModule } from './health/health.module';
+import { WalletsModule } from './modules/wallets/wallets.module';
+import { WageringModule } from './modules/wagering/wagering.module';
 
 @Module({
   imports: [
@@ -10,6 +12,8 @@ import { HealthModule } from './health/health.module';
     DatabaseModule,
     PersistenceModule,
     HealthModule,
+    WalletsModule,
+    WageringModule,
   ],
 })
 export class AppModule {}
