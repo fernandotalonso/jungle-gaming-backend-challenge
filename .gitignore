@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# build
+dist/
+coverage/
+
+# env
+.env
+.env.local
+
+# logs
+*.log
+
+# os
+.DS_Store
+
+# mikro-orm migration snapshot is regenerated; keep it versioned for reproducibility
+# (do not ignore migrations/)

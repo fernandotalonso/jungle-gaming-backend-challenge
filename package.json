@@ -1,0 +1,50 @@
+{
+  "name": "jungle-wagering-processor",
+  "version": "0.1.0",
+  "description": "Distributed wagering processor — Jungle Gaming technical challenge",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "start:dev": "bun --watch src/main.ts",
+    "start": "bun run build && bun dist/main.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "test:integration": "bun test test/integration",
+    "test:concurrency": "bun test test/concurrency",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "migration:create": "bunx --bun mikro-orm migration:create",
+    "migration:list": "bunx --bun mikro-orm migration:list",
+    "migration:up": "bunx --bun mikro-orm migration:up",
+    "migration:down": "bunx --bun mikro-orm migration:down"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "^3.700.0",
+    "@mikro-orm/core": "^6.4.0",
+    "@mikro-orm/migrations": "^6.4.0",
+    "@mikro-orm/nestjs": "^6.1.0",
+    "@mikro-orm/postgresql": "^6.4.0",
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "ajv": "^8",
+    "decimal.js": "^10.4.3",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@mikro-orm/cli": "^6.4.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "bun-types": "^1.4.4",
+    "eslint": "^9.18.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.20.0"
+  }
+}

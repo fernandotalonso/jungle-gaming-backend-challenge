@@ -1,0 +1,81 @@
+name: jungle-wagering
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: jungle-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jungle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jungle}
+      POSTGRES_DB: ${POSTGRES_DB:-jungle_wagering}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # PG18 image layout: single mount at /var/lib/postgresql (data goes to a
+      # versioned subdirectory, enabling future pg_upgrade --link)
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-jungle} -d ${POSTGRES_DB:-jungle_wagering}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  localstack:
+    image: localstack/localstack:4.0
+    container_name: jungle-localstack
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: ${SQS_REGION:-us-east-1}
+      # standard strategy -> queue URLs like http://localhost:4566/000000000000/<queue>
+      SQS_ENDPOINT_STRATEGY: standard
+      # keep SQS state across container restarts (deterministic dev/test env)
+      PERSISTENCE: "1"
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - ./docker/localstack/init:/etc/localstack/init/ready.d:ro
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:4566/_localstack/health >/dev/null || exit 1",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: jungle-keycloak
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    volumes:
+      - ./docker/keycloak/realm-jungle.json:/opt/keycloak/data/import/realm-jungle.json:ro
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      # image has no curl/wget; bash /dev/tcp is the reliable TCP probe here.
+      # the management port (9000) binds only after full startup, so a
+      # successful connect implies the server is ready.
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/localhost/9000' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 36
+
+volumes:
+  postgres-data:
+  localstack-data:
+  keycloak-data:
