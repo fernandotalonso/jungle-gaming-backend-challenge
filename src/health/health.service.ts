@@ -3,7 +3,7 @@ import { MikroORM } from '@mikro-orm/core';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { injectOrm } from '../database/database.module';
-import { SQS_CLIENT } from '../modules/messaging/messaging.module';
+import { SQS_CLIENT } from '../modules/messaging/infrastructure/sqs/sqs-client';
 
 export interface DependencyState {
   status: 'up' | 'down';

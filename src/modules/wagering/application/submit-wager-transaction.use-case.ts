@@ -86,33 +86,7 @@ export class SubmitWagerTransactionUseCase {
 
     try {
       return await this.deps.uow.run(async (db: Db): Promise<SubmitWagerTransactionResult> => {
-        const now = new Date();
-        const tx = WagerTransaction.create({
-          id: generateId(),
-          providerId: command.providerId,
-          externalTransactionId: command.externalTransactionId,
-          idempotencyKey: command.idempotencyKey,
-          payloadHash: payloadHashValue,
-          walletId: command.walletId,
-          playerId: command.playerId,
-          roundId: command.roundId,
-          gameId: command.gameId,
-          kind: command.kind,
-          money: command.money,
-          referenceExternalTransactionId: command.referenceExternalTransactionId,
-          createdAt: now,
-        });
-
-        const wallet = await this.deps.wallets.findByIdForUpdate(command.walletId, db);
-        const outcome = await this.deps.applier.process(db, tx, wallet, now, { correlationId });
-
-        return {
-          transactionId: tx.id,
-          status: outcome.status,
-          balance: outcome.balance,
-          failureCode: outcome.failureCode,
-          idempotentReplay: false,
-        };
+        return await this.processInDb(db, command, payloadHashValue, { correlationId });
       });
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
@@ -126,6 +100,85 @@ export class SubmitWagerTransactionUseCase {
       }
       throw error;
     }
+  }
+
+  /**
+   * Consumer path: runs inside the CALLER's transaction, so the persistent
+   * inbox record and the whole financial effect commit atomically together
+   * (README 6.5). Does not catch unique-violations — the caller decides.
+   */
+  async executeInTransaction(
+    db: Db,
+    command: SubmitWagerTransactionCommand,
+    ctx?: { correlationId?: string },
+  ): Promise<SubmitWagerTransactionResult> {
+    const correlationId = ctx?.correlationId ?? generateId();
+    const payloadHashValue = computePayloadHash(command);
+    return await this.processInDb(db, command, payloadHashValue, { correlationId });
+  }
+
+  /** Resolves an existing transaction by key for a caller that lost a race (SQS consumer). */
+  async resolveExistingByKey(
+    idempotencyKey: string,
+    payloadHashValue: string,
+  ): Promise<SubmitWagerTransactionResult> {
+    const winner = await this.deps.transactions.findByIdempotencyKey(idempotencyKey);
+    if (!winner) {
+      throw new Error(`idempotency key "${idempotencyKey}" not found after race`);
+    }
+    return this.resolveExisting(winner, payloadHashValue);
+  }
+
+  private async processInDb(
+    db: Db,
+    command: SubmitWagerTransactionCommand,
+    payloadHashValue: string,
+    ctx: ProcessContext,
+  ): Promise<SubmitWagerTransactionResult> {
+    // in-transaction dedup: replay returns the original result; a different
+    // payload under the same key is a conflict (aborts the transaction)
+    const existing = await this.deps.transactions.findByIdempotencyKey(command.idempotencyKey, db);
+    if (existing) {
+      if (!existing.matchesPayload(payloadHashValue)) {
+        throw new IdempotencyConflictError(command.idempotencyKey);
+      }
+      const balance = await this.observedBalance(existing, db);
+      return {
+        transactionId: existing.id,
+        status: existing.status,
+        balance,
+        failureCode: existing.failureCode,
+        idempotentReplay: true,
+      };
+    }
+
+    const now = new Date();
+    const tx = WagerTransaction.create({
+      id: generateId(),
+      providerId: command.providerId,
+      externalTransactionId: command.externalTransactionId,
+      idempotencyKey: command.idempotencyKey,
+      payloadHash: payloadHashValue,
+      walletId: command.walletId,
+      playerId: command.playerId,
+      roundId: command.roundId,
+      gameId: command.gameId,
+      kind: command.kind,
+      money: command.money,
+      referenceExternalTransactionId: command.referenceExternalTransactionId,
+      createdAt: now,
+    });
+
+    const wallet = await this.deps.wallets.findByIdForUpdate(command.walletId, db);
+    const outcome = await this.deps.applier.process(db, tx, wallet, now, ctx);
+
+    return {
+      transactionId: tx.id,
+      status: outcome.status,
+      balance: outcome.balance,
+      failureCode: outcome.failureCode,
+      idempotentReplay: false,
+    };
   }
 
   private async resolveExisting(tx: WagerTransaction, payloadHashValue: string): Promise<SubmitWagerTransactionResult> {
@@ -148,18 +201,25 @@ export class SubmitWagerTransactionUseCase {
    * entries expose balanceAfter; non-movement transactions resolve to the
    * balanceBefore of the next entry (or current balance when none).
    */
-  private async observedBalance(tx: WagerTransaction): Promise<MoneyProps | null> {
+  private async observedBalance(tx: WagerTransaction, db?: Db): Promise<MoneyProps | null> {
     if (tx.status === WagerTransactionStatus.PendingReference) {
-      const wallet = await this.deps.wallets.findById(tx.walletId);
+      const wallet = await this.deps.wallets.findById(tx.walletId, db);
       return wallet ? wallet.balance.toJSON() : null;
     }
-      return this.deps.uow.run(async (db: Db) => {
-        const wallet = await this.deps.wallets.findById(tx.walletId, db);
-        if (!wallet) {
-          return null;
-        }
-        return await this.deps.applier.observedBalance(db, wallet, tx);
-      });
+    if (db) {
+      const wallet = await this.deps.wallets.findById(tx.walletId, db);
+      if (!wallet) {
+        return null;
+      }
+      return await this.deps.applier.observedBalance(db, wallet, tx);
+    }
+    return this.deps.uow.run(async (txDb: Db) => {
+      const wallet = await this.deps.wallets.findById(tx.walletId, txDb);
+      if (!wallet) {
+        return null;
+      }
+      return await this.deps.applier.observedBalance(txDb, wallet, tx);
+    });
   }
 }
 
