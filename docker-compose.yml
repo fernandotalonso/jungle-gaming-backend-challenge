@@ -3,6 +3,8 @@ name: jungle-wagering
 services:
   postgres:
     image: postgres:18-alpine
+    # concurrency test suites run files in parallel: leave headroom for pools
+    command: ["postgres", "-c", "max_connections=300"]
     container_name: jungle-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-jungle}

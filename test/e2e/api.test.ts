@@ -39,8 +39,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   // Express keep-alive holds idle fetch connections for its 5s timeout;
-  // don't make the test suite wait for that
-  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
+  // don't make the test suite wait for that (or fail on close races)
+  await Promise.race([
+    app.close().catch((error: unknown) => {
+      console.warn('app close warning:', error instanceof Error ? error.message : error);
+    }),
+    new Promise((resolve) => setTimeout(resolve, 2_000)),
+  ]);
 });
 
 describe('observability endpoints', () => {

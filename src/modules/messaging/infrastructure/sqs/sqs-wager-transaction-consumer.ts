@@ -90,8 +90,8 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
   }
 
   /** Poll/process cycle — public so integration tests can drive it deterministically. */
-  async pollOnce(queueUrl: string): Promise<number> {
-    const messages = await this.receive(queueUrl);
+  async pollOnce(queueUrl: string, options: { maxMessages?: number } = {}): Promise<number> {
+    const messages = await this.receive(queueUrl, options.maxMessages ?? MAX_MESSAGES_PER_POLL);
     for (const message of messages) {
       if (this.stopping) {
         break; // remaining messages keep their visibility — redelivered later
@@ -127,10 +127,10 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
     }
   }
 
-  private async receive(queueUrl: string) {
+  private async receive(queueUrl: string, maxMessages: number) {
     const input: ReceiveMessageCommandInput = {
       QueueUrl: queueUrl,
-      MaxNumberOfMessages: MAX_MESSAGES_PER_POLL,
+      MaxNumberOfMessages: maxMessages,
       WaitTimeSeconds: LONG_POLL_SECONDS,
       MessageSystemAttributeNames: ['ApproximateReceiveCount'],
       ReceiveRequestAttemptId: generateId(),

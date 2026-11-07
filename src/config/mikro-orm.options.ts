@@ -5,6 +5,8 @@ import { ENTITIES } from '../database/entities';
 export interface MikroOrmOptionsInput {
   databaseUrl?: string;
   debug?: boolean;
+  /** knex pool size — heavier than the default 10 for concurrency tests */
+  poolMax?: number;
 }
 
 const DEFAULT_DATABASE_URL = 'postgres://jungle:jungle@localhost:5432/jungle_wagering';
@@ -27,6 +29,7 @@ export function buildMikroOrmOptions(input: MikroOrmOptionsInput = {}): Options 
       transactional: true,
       allOrNothing: true,
     },
+    pool: { min: 1, max: input.poolMax ?? Number(process.env.PG_POOL_MAX ?? 40) },
     debug: input.debug ?? false,
   };
 }
