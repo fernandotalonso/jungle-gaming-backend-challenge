@@ -6,6 +6,7 @@ import { HealthModule } from './health/health.module';
 import { WalletsModule } from './modules/wallets/wallets.module';
 import { WageringModule } from './modules/wagering/wagering.module';
 import { HttpModule } from './http/http.module';
+import { ObservabilityModule } from './observability/observability.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { HttpModule } from './http/http.module';
     PersistenceModule,
     HttpModule,
     HealthModule,
+    ObservabilityModule,
     WalletsModule,
     WageringModule,
   ],

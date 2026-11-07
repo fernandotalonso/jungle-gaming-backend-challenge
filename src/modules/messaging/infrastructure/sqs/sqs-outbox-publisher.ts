@@ -1,11 +1,13 @@
 import { SendMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
-import { Inject, Injectable, Logger, type OnApplicationBootstrap, type BeforeApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, type OnApplicationBootstrap, type BeforeApplicationShutdown } from '@nestjs/common';
 import { generateId } from '../../../../shared/ids';
 import type { Db } from '../../../../shared/application/db';
 import type { UnitOfWork } from '../../../../shared/application/ports/unit-of-work';
 import type { OutboxRepository } from '../../application/ports/outbox.repository';
 import type { OutboxMessage } from '../../domain/outbox-message';
 import { SQS_CLIENT } from './sqs-client';
+import { logger, type LogContext } from '../../../../observability/logger';
+import { metrics } from '../../../../observability/metrics';
 
 const PUBLISHER_BATCH_SIZE = 50;
 const IDLE_SLEEP_MS = 500;
@@ -33,7 +35,6 @@ interface SerializedEventEnvelope {
  */
 @Injectable()
 export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplicationShutdown {
-  private readonly logger = new Logger('OutboxPublisher');
   private stopping = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private loopPromise: Promise<void> | null = null;
@@ -47,11 +48,11 @@ export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplica
   onApplicationBootstrap(): void {
     const enabled = process.env.PUBLISHER_ENABLED ?? 'true';
     if (enabled !== 'true') {
-      this.logger.log('publisher disabled (PUBLISHER_ENABLED != true)');
+      this.log('publisher disabled (PUBLISHER_ENABLED != true)');
       return;
     }
     this.loopPromise = this.loop().catch((error) => {
-      this.logger.error(`publisher loop crashed: ${describe(error)}`);
+      this.logError(`publisher loop crashed: ${describe(error)}`);
     });
   }
 
@@ -64,7 +65,7 @@ export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplica
     if (this.loopPromise) {
       await this.loopPromise;
     }
-    this.logger.log('publisher stopped cleanly');
+    this.log('publisher stopped cleanly');
   }
 
   /** Publish/process cycle — public so integration tests can drive it deterministically. */
@@ -74,19 +75,31 @@ export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplica
       for (const message of messages) {
         await this.publishMessage(db, message, queueUrl, now);
       }
+      await this.observeOutboxLag(db, now);
       return messages.length;
     });
   }
 
+  /** Age of the oldest unpublished event — sampled once per cycle (README 12). */
+  private async observeOutboxLag(db: Db, now: Date): Promise<void> {
+    const rows = (await db.execute<Array<{ lag: string }>>(
+      `SELECT COALESCE(MAX(EXTRACT(EPOCH FROM (?::timestamptz - occurred_at))), 0) AS lag
+       FROM outbox_messages WHERE published_at IS NULL`,
+      [now],
+      'all',
+    )) as Array<{ lag: string }>;
+    metrics.setOutboxLag(Number(rows[0]?.lag ?? '0'));
+  }
+
   private async loop(): Promise<void> {
     const queueUrl = this.queueUrl();
-    this.logger.log(`publisher started on ${queueUrl}`);
+    this.log(`publisher started on ${queueUrl}`);
     while (!this.stopping) {
       let processed = 0;
       try {
         processed = await this.publishOnce(queueUrl, new Date());
       } catch (error) {
-        this.logger.warn(`publish cycle failed, retrying soon: ${describe(error)}`);
+        this.logWarn(`publish cycle failed, retrying soon: ${describe(error)}`);
       }
       if (processed === 0 && !this.stopping) {
         await new Promise<void>((resolve) => {
@@ -97,14 +110,15 @@ export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplica
   }
 
   private async publishMessage(db: Db, message: OutboxMessage, queueUrl: string, now: Date): Promise<void> {
-    try {
-      await this.sendEvent(message, queueUrl);
+    try {      await this.sendEvent(message, queueUrl);
       message.markPublished(now);
-      this.logger.log(`published event ${eventTypeOf(message)} eventId=${eventIdOf(message)} attempts=${message.attempts}`);
+      metrics.published(1);
+      this.log(`published event ${eventTypeOf(message)} eventId=${eventIdOf(message)} attempts=${message.attempts}`);
     } catch (error) {
       message.scheduleRetry(now);
+      metrics.retry('publisher');
       const alert = message.attempts >= MAX_ATTEMPTS_BEFORE_ALERT ? ' (ATTEMPT LIMIT EXCEEDED — keep retrying)' : '';
-      this.logger.warn(
+      this.logWarn(
         `publish failed for event ${eventIdOf(message)} attempts=${message.attempts}${alert}: ${describe(error)}`,
       );
     }
@@ -123,6 +137,18 @@ export class SqsOutboxPublisher implements OnApplicationBootstrap, BeforeApplica
         MessageDeduplicationId: eventId.slice(0, MAX_EVENT_ID_LENGTH),
       }),
     );
+  }
+
+  private log(message: string, fields: LogContext = {}): void {
+    logger.info(message, { context: 'OutboxPublisher', ...fields });
+  }
+
+  private logWarn(message: string, fields: LogContext = {}): void {
+    logger.warn(message, { context: 'OutboxPublisher', ...fields });
+  }
+
+  private logError(message: string, fields: LogContext = {}): void {
+    logger.error(message, { context: 'OutboxPublisher', ...fields });
   }
 
   private queueUrl(): string {

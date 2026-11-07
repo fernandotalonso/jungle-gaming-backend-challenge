@@ -1,12 +1,13 @@
 import {
   ChangeMessageVisibilityCommand,
   DeleteMessageCommand,
+  GetQueueAttributesCommand,
   type ReceiveMessageCommandInput,
   ReceiveMessageCommand,
   SendMessageCommand,
   type SQSClient,
 } from '@aws-sdk/client-sqs';
-import { Inject, Injectable, Logger, type OnApplicationBootstrap, type BeforeApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, type OnApplicationBootstrap, type BeforeApplicationShutdown } from '@nestjs/common';
 import { UniqueConstraintViolationException } from '@mikro-orm/core';
 import { generateId } from '../../../../shared/ids';
 import { payloadHash } from '../../../../shared/canonical-json';
@@ -26,6 +27,8 @@ import {
   type SubmitWagerTransactionCommand,
 } from '../../../wagering/application/submit-wager-transaction.use-case';
 import { SQS_CLIENT } from './sqs-client';
+import { metrics } from '../../../../observability/metrics';
+import { logger, runWithLogContext, type LogContext } from '../../../../observability/logger';
 import { EnvelopeValidationError, envelopeToCommand, parseWagerTransactionEnvelope } from './message-envelope';
 
 const CONSUMER_NAME = 'wager-transactions-consumer';
@@ -53,7 +56,6 @@ const BACKOFF_MAX_MS = 60_000;
  */
 @Injectable()
 export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, BeforeApplicationShutdown {
-  private readonly logger = new Logger('SqsConsumer');
   private stopping = false;
   private loopPromise: Promise<void> | null = null;
   private abortController: AbortController | null = null;
@@ -68,11 +70,11 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
   onApplicationBootstrap(): void {
     const enabled = process.env.CONSUMER_ENABLED ?? 'true';
     if (enabled !== 'true') {
-      this.logger.log('consumer disabled (CONSUMER_ENABLED != true)');
+      this.log('consumer disabled (CONSUMER_ENABLED != true)');
       return;
     }
     this.loopPromise = this.loop().catch((error) => {
-      this.logger.error(`consumer loop crashed: ${describe(error)}`);
+      this.logError(`consumer loop crashed: ${describe(error)}`);
     });
   }
 
@@ -80,9 +82,11 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
     this.stopping = true;
     this.abortController?.abort();
     if (this.loopPromise) {
-      await this.loopPromise;
+      // the SDK may take a moment to unwind the long poll; never block the
+      // shutdown past this deadline — in-flight messages redeliver safely
+      await Promise.race([this.loopPromise, sleep(3_000)]);
     }
-    this.logger.log('consumer stopped cleanly');
+    this.log('consumer stopped cleanly');
   }
 
   /** Poll/process cycle — public so integration tests can drive it deterministically. */
@@ -101,14 +105,14 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
   start(): void {
     if (this.loopPromise === null) {
       this.loopPromise = this.loop().catch((error) => {
-        this.logger.error(`consumer loop crashed: ${describe(error)}`);
+        this.logError(`consumer loop crashed: ${describe(error)}`);
       });
     }
   }
 
   private async loop(): Promise<void> {
     const queueUrl = this.queueUrl();
-    this.logger.log(`consumer started on ${queueUrl}`);
+    this.log(`consumer started on ${queueUrl}`);
     while (!this.stopping) {
       this.abortController = new AbortController();
       try {
@@ -117,7 +121,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
         if (this.stopping || isAbortError(error)) {
           break;
         }
-        this.logger.warn(`receive failed, retrying soon: ${describe(error)}`);
+        this.logWarn(`receive failed, retrying soon: ${describe(error)}`);
         await sleep(1_000);
       }
     }
@@ -153,7 +157,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       command = envelopeToCommand(envelope);
     } catch (error) {
       if (error instanceof EnvelopeValidationError) {
-        this.logger.warn(`invalid envelope for messageId=${messageId}: ${describe(error)} -> DLQ`);
+        this.logWarn(`invalid envelope for messageId=${messageId}: ${describe(error)} -> DLQ`);
         await this.moveToDlq(queueUrl, message, error);
         return;
       }
@@ -162,12 +166,18 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
     const payloadHashValue = computePayloadHash(command);
 
     try {
-      const outcome = await this.processWithInbox(messageId, body, command);
+      const startedAt = Date.now();
+      const outcome = await runWithLogContext(
+        { correlationId: generateId(), messageId, providerId: command.providerId, walletId: command.walletId },
+        async () => this.processWithInbox(messageId, body, command),
+      );
+      metrics.observeProcessingDuration('sqs', (Date.now() - startedAt) / 1000);
       if (outcome.duplicate) {
-        this.logger.log(`redelivery ignored (inbox): messageId=${messageId}`);
+        metrics.duplicate();
+        this.log(`redelivery ignored (inbox): messageId=${messageId}`);
       } else {
-        this.logger.log(
-          `processed messageId=${messageId} status=${outcome.status} replay=${outcome.idempotentReplay} receiveCount=${receiveCount}`,
+        this.log(
+          `processed messageId=${messageId} transactionId=${outcome.transactionId} status=${outcome.status} replay=${outcome.idempotentReplay} receiveCount=${receiveCount}`,
         );
       }
       await this.ack(queueUrl, receiptHandle);
@@ -179,7 +189,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
         error instanceof IdempotencyConflictError;
 
       if (permanent) {
-        this.logger.warn(`permanent failure for messageId=${messageId}: ${describe(error)} -> DLQ`);
+        this.logWarn(`permanent failure for messageId=${messageId}: ${describe(error)} -> DLQ`);
         await this.moveToDlq(queueUrl, message, error);
         return;
       }
@@ -187,10 +197,10 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
         // same idempotency key committed concurrently: resolve as replay or conflict
         try {
           const resolved = await this.submit.resolveExistingByKey(command.idempotencyKey, payloadHashValue);
-          this.logger.log(`race resolved as replay: messageId=${messageId} status=${resolved.status}`);
+          this.log(`race resolved as replay: messageId=${messageId} status=${resolved.status}`);
           await this.ack(queueUrl, receiptHandle);
         } catch (conflictError) {
-          this.logger.warn(`race resolved as conflict for messageId=${messageId}: ${describe(conflictError)} -> DLQ`);
+          this.logWarn(`race resolved as conflict for messageId=${messageId}: ${describe(conflictError)} -> DLQ`);
           await this.moveToDlq(queueUrl, message, conflictError);
         }
         return;
@@ -199,7 +209,8 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       // transient: exponential backoff via visibility timeout; the queue's
       // redrive policy moves it to the DLQ after maxReceiveCount
       const visibilitySeconds = Math.round(Math.min(BACKOFF_BASE_MS * 2 ** (receiveCount - 1), BACKOFF_MAX_MS) / 1000);
-      this.logger.warn(
+      metrics.retry('consumer');
+      this.logWarn(
         `transient failure for messageId=${messageId} (receiveCount=${receiveCount}): ${describe(error)} -> retry in ${visibilitySeconds}s`,
       );
       await this.sqs.send(
@@ -221,7 +232,7 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
     messageId: string,
     rawBody: string,
     command: SubmitWagerTransactionCommand,
-  ): Promise<{ duplicate: boolean; status: string; idempotentReplay: boolean }> {
+  ): Promise<{ duplicate: boolean; status: string; idempotentReplay: boolean; transactionId?: string }> {
     return this.uow.run(async (db: Db) => {
       const inboxMessage = InboxMessage.receive({
         messageId,
@@ -239,6 +250,20 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       });
       return { duplicate: false, status: result.status, idempotentReplay: result.idempotentReplay };
     });
+  }
+
+  private async refreshDlqSize(): Promise<void> {
+    const dlqUrl = process.env.SQS_WAGER_TRANSACTIONS_DLQ_URL;
+    if (!dlqUrl) {
+      return;
+    }
+    const result = await this.sqs.send(
+      new GetQueueAttributesCommand({
+        QueueUrl: dlqUrl,
+        AttributeNames: ['ApproximateNumberOfMessages'],
+      }),
+    );
+    metrics.setDlqSize(Number(result.Attributes?.ApproximateNumberOfMessages ?? '0'));
   }
 
   private async ack(queueUrl: string, receiptHandle: string): Promise<void> {
@@ -273,7 +298,21 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       }),
     );
     await this.ack(queueUrl, message.ReceiptHandle ?? '');
-    this.logger.warn(`message ${message.MessageId ?? 'unknown'} moved to DLQ`);
+    metrics.dlqMove();
+    await this.refreshDlqSize();
+    this.logWarn(`message ${message.MessageId ?? 'unknown'} moved to DLQ`);
+  }
+
+  private log(message: string, fields: LogContext = {}): void {
+    logger.info(message, { context: 'SqsConsumer', ...fields });
+  }
+
+  private logWarn(message: string, fields: LogContext = {}): void {
+    logger.warn(message, { context: 'SqsConsumer', ...fields });
+  }
+
+  private logError(message: string, fields: LogContext = {}): void {
+    logger.error(message, { context: 'SqsConsumer', ...fields });
   }
 
   private queueUrl(): string {

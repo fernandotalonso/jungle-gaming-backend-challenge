@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import type { INestApplication } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { NestJsonLogger } from './observability/logger';
 
 /**
  * Boots the HTTP application. Exported so e2e tests can start the app on a
@@ -10,7 +11,7 @@ import { AppModule } from './app.module';
  */
 export async function bootstrap(): Promise<INestApplication> {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule, { logger: ['error', 'warn', 'log'] });
+  const app = await NestFactory.create(AppModule, { logger: new NestJsonLogger() });
 
   // Required for graceful shutdown handling (SIGTERM) in later phases.
   app.enableShutdownHooks();

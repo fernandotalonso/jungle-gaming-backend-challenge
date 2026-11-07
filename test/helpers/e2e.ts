@@ -12,6 +12,10 @@ let appPromise: Promise<INestApplication> | null = null;
 export function getTestApp(): Promise<INestApplication> {
   if (!appPromise) {
     process.env.APP_PORT = String(TEST_PORT);
+    // the messaging integration tests drive the consumer/publisher manually;
+    // a live app instance would steal their queue messages (parallel workers)
+    process.env.CONSUMER_ENABLED = 'false';
+    process.env.PUBLISHER_ENABLED = 'false';
     appPromise = bootstrap();
   }
   return appPromise;

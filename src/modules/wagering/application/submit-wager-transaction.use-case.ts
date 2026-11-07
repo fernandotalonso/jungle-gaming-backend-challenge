@@ -19,6 +19,7 @@ import {
   WagerTransactionApplier,
   type ProcessContext,
 } from './wager-transaction-applier';
+import { metrics } from '../../../observability/metrics';
 
 export interface SubmitWagerTransactionCommand {
   providerId: string;
@@ -86,7 +87,7 @@ export class SubmitWagerTransactionUseCase {
 
     try {
       return await this.deps.uow.run(async (db: Db): Promise<SubmitWagerTransactionResult> => {
-        return await this.processInDb(db, command, payloadHashValue, { correlationId });
+        return await this.processInDb(db, command, payloadHashValue, { correlationId }, 'http');
       });
     } catch (error) {
       if (error instanceof UniqueConstraintViolationException) {
@@ -114,7 +115,7 @@ export class SubmitWagerTransactionUseCase {
   ): Promise<SubmitWagerTransactionResult> {
     const correlationId = ctx?.correlationId ?? generateId();
     const payloadHashValue = computePayloadHash(command);
-    return await this.processInDb(db, command, payloadHashValue, { correlationId });
+    return await this.processInDb(db, command, payloadHashValue, { correlationId }, 'sqs');
   }
 
   /** Resolves an existing transaction by key for a caller that lost a race (SQS consumer). */
@@ -134,7 +135,9 @@ export class SubmitWagerTransactionUseCase {
     command: SubmitWagerTransactionCommand,
     payloadHashValue: string,
     ctx: ProcessContext,
+    source: 'http' | 'sqs',
   ): Promise<SubmitWagerTransactionResult> {
+    const startedAt = Date.now();
     // in-transaction dedup: replay returns the original result; a different
     // payload under the same key is a conflict (aborts the transaction)
     const existing = await this.deps.transactions.findByIdempotencyKey(command.idempotencyKey, db);
@@ -142,6 +145,7 @@ export class SubmitWagerTransactionUseCase {
       if (!existing.matchesPayload(payloadHashValue)) {
         throw new IdempotencyConflictError(command.idempotencyKey);
       }
+      metrics.replay();
       const balance = await this.observedBalance(existing, db);
       return {
         transactionId: existing.id,
@@ -172,6 +176,9 @@ export class SubmitWagerTransactionUseCase {
     const wallet = await this.deps.wallets.findByIdForUpdate(command.walletId, db);
     const outcome = await this.deps.applier.process(db, tx, wallet, now, ctx);
 
+    metrics.transaction(outcome.status);
+    metrics.observeProcessingDuration(source, (Date.now() - startedAt) / 1000);
+
     return {
       transactionId: tx.id,
       status: outcome.status,
@@ -183,8 +190,10 @@ export class SubmitWagerTransactionUseCase {
 
   private async resolveExisting(tx: WagerTransaction, payloadHashValue: string): Promise<SubmitWagerTransactionResult> {
     if (!tx.matchesPayload(payloadHashValue)) {
+      metrics.idempotencyConflict();
       throw new IdempotencyConflictError(tx.idempotencyKey);
     }
+    metrics.replay();
     const balance = await this.observedBalance(tx);
     return {
       transactionId: tx.id,

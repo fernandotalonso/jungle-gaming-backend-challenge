@@ -38,7 +38,44 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await app.close();
+  // Express keep-alive holds idle fetch connections for its 5s timeout;
+  // don't make the test suite wait for that
+  await Promise.race([app.close(), new Promise((resolve) => setTimeout(resolve, 2_000))]);
+});
+
+describe('observability endpoints', () => {
+  it('metrics endpoint is public and exposes the wagering metrics after activity', async () => {
+    // some activity first
+    const created = await post('/wallets', { playerId: 'player-e2e-metrics', initialBalance: WALLET_BODY.initialBalance });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json()) as { id: string };
+    await post('/wagering/transactions', {
+      providerId: 'provider-a',
+      externalTransactionId: `ext-${crypto.randomUUID()}`,
+      playerId: 'player-e2e-metrics',
+      walletId: id,
+      roundId: 'round-1',
+      gameId: 'fortune-chimp',
+      kind: 'BET',
+      money: { amount: '10.00', currency: 'BRL' },
+    }, { 'Idempotency-Key': `key-${crypto.randomUUID()}` });
+
+    const metricsResponse = await get('/metrics', false);
+    expect(metricsResponse.status).toBe(200);
+    const text = await metricsResponse.text();
+    expect(text).toContain('wagering_transactions_total{status="PROCESSED"}');
+    expect(text).toContain('wagering_http_request_duration_seconds_count');
+    expect(text).toContain('wagering_wallet_lock_wait_seconds');
+    expect(text).toContain('wagering_outbox_lag_seconds');
+  });
+
+  it('echoes the correlation id on responses', async () => {
+    const correlationId = crypto.randomUUID();
+    const response = await fetch(`${BASE}/health/live`, {
+      headers: { 'x-correlation-id': correlationId },
+    });
+    expect(response.headers.get('x-correlation-id')).toBe(correlationId);
+  });
 });
 
 describe('auth', () => {

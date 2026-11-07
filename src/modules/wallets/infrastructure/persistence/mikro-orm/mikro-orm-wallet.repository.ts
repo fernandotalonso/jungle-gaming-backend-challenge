@@ -4,6 +4,7 @@ import type { Db } from '../../../../../shared/application/db';
 import type { WalletRepository } from '../../../application/ports/wallet.repository';
 import { Wallet } from '../../../domain/wallet';
 import { WalletEntity } from './wallet.entity';
+import { metrics } from '../../../../../observability/metrics';
 
 function toDomain(entity: WalletEntity): Wallet {
   return Wallet.rehydrate({
@@ -56,7 +57,11 @@ export class MikroOrmWalletRepository implements WalletRepository {
   }
 
   async findByIdForUpdate(id: string, db: Db): Promise<Wallet | null> {
+    const startedAt = Date.now();
     const entity = await db.findOne(WalletEntity, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+    // time waiting for the row lock: waits above the threshold are counted as
+    // lock conflicts (README 12)
+    metrics.observeLockWait((Date.now() - startedAt) / 1000);
     return entity ? toDomain(entity) : null;
   }
 }

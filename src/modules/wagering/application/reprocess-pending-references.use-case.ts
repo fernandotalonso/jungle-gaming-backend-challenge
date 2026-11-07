@@ -8,6 +8,7 @@ import { FailureCode } from '../domain/failure-code';
 import { WagerTransactionStatus, MAX_REFERENCE_ATTEMPTS } from '../domain/wager-transaction';
 import type { ProcessContext, ProcessOutcome } from './wager-transaction-applier';
 import { WagerTransactionApplier } from './wager-transaction-applier';
+import { metrics } from '../../../observability/metrics';
 
 export interface ReprocessSummary {
   checked: number;
@@ -83,6 +84,7 @@ export class ReprocessPendingReferencesUseCase {
         const outcome: ProcessOutcome = await this.deps.applier.process(db, tx, wallet, now, processCtx, {
           alreadyPersisted: true,
         });
+        metrics.transaction(outcome.status);
         if (outcome.status === WagerTransactionStatus.Processed) {
           processed += 1;
         } else if (outcome.status === WagerTransactionStatus.Rejected) {
