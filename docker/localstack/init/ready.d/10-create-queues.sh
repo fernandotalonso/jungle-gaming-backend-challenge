@@ -24,4 +24,10 @@ awslocal sqs create-queue \
   --attributes "{\"FifoQueue\":\"true\",\"ContentBasedDeduplication\":\"false\",\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"${DLQ_ARN}\\\",\\\"maxReceiveCount\\\":${MAX_RECEIVES}}\"}" \
   --query 'QueueUrl' --output text
 
+echo "[init] creating events queue: wager-events.fifo"
+awslocal sqs create-queue \
+  --queue-name wager-events.fifo \
+  --attributes '{"FifoQueue":"true","ContentBasedDeduplication":"false"}' \
+  --query 'QueueUrl' --output text
+
 echo "[init] queues ready."

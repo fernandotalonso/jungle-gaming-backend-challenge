@@ -155,7 +155,7 @@ export class MikroOrmWagerTransactionRepository implements WagerTransactionRepos
       `SELECT * FROM wager_transactions
        WHERE status = ?
          AND (next_reference_check_at IS NULL OR next_reference_check_at <= ?)
-       ORDER BY created_at ASC
+       ORDER BY created_at ASC, id ASC
        LIMIT ?
        FOR UPDATE SKIP LOCKED`,
       [WagerTransactionStatus.PendingReference, now, limit],

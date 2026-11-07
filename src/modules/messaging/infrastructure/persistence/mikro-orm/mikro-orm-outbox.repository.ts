@@ -47,7 +47,7 @@ export class MikroOrmOutboxRepository implements OutboxRepository {
       `SELECT * FROM outbox_messages
        WHERE published_at IS NULL
          AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-       ORDER BY next_attempt_at ASC
+       ORDER BY next_attempt_at ASC, id ASC
        LIMIT ?
        FOR UPDATE SKIP LOCKED`,
       [now, limit],
