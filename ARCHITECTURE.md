@@ -147,8 +147,10 @@ Referência ausente ou ainda não `PROCESSED` → transação persiste como
 Referência existente porém `REJECTED`/`FAILED` (nunca será aplicada) →
 rejeição imediata com `REFERENCE_KIND_MISMATCH` ("referência não aplicável").
 
-O worker (`ReprocessPendingReferencesUseCase`) reivindica as pendências com
-`FOR UPDATE SKIP LOCKED` — seguro com múltiplas instâncias.
+O worker (`ReprocessPendingReferencesUseCase`) é agendado pela aplicação
+(`PendingReferenceScheduler`, ciclo fixo de 5s, configurável por
+`REFERENCE_WORKER_INTERVAL_MS`/`REFERENCE_WORKER_ENABLED`) e reivindica as
+pendências com `FOR UPDATE SKIP LOCKED` — seguro com múltiplas instâncias.
 
 ### 2.8 Máquina de estados — `WagerTransaction`
 

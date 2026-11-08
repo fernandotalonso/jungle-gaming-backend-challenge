@@ -7,6 +7,7 @@ import { UNIT_OF_WORK } from '../../shared/application/ports/unit-of-work';
 import { WagerTransactionApplier } from './application/wager-transaction-applier';
 import { SubmitWagerTransactionUseCase } from './application/submit-wager-transaction.use-case';
 import { ReprocessPendingReferencesUseCase } from './application/reprocess-pending-references.use-case';
+import { PendingReferenceScheduler } from './infrastructure/schedule/pending-reference-scheduler';
 import { WageringController } from './infrastructure/http/wagering.controller';
 
 const applier: Provider = {
@@ -30,9 +31,24 @@ const reprocessPendingReferencesUseCase: Provider = {
     new ReprocessPendingReferencesUseCase({ uow, wallets, transactions, outbox, applier }),
 };
 
+const pendingReferenceScheduler: Provider = {
+  provide: PendingReferenceScheduler,
+  inject: [ReprocessPendingReferencesUseCase],
+  useFactory: (reprocess) => new PendingReferenceScheduler(reprocess),
+};
+
 @Module({
   controllers: [WageringController],
-  providers: [applier, submitWagerTransactionUseCase, reprocessPendingReferencesUseCase],
-  exports: [WagerTransactionApplier, SubmitWagerTransactionUseCase, ReprocessPendingReferencesUseCase],
+  providers: [
+    applier,
+    submitWagerTransactionUseCase,
+    reprocessPendingReferencesUseCase,
+    pendingReferenceScheduler,
+  ],
+  exports: [
+    WagerTransactionApplier,
+    SubmitWagerTransactionUseCase,
+    ReprocessPendingReferencesUseCase,
+  ],
 })
 export class WageringModule {}

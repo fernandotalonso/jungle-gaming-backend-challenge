@@ -107,8 +107,10 @@ Use o `access_token` no header `Authorization: Bearer <token>`.
 | `bun run migration:list` | lista migrations aplicadas |
 
 > As suítes `integration`, `e2e` e `concurrency` exigem o
-> `docker compose up -d` ativo. `bun test` roda tudo em um processo — o pool
-> do banco é compartilhado (ajustável por `PG_POOL_MAX`).
+> `docker compose up -d` ativo e o **`bun run start:dev` PARADO** — o dev
+> server consome as mesmas filas do SQS e disputa as mensagens dos testes.
+> `bun test` roda tudo em um processo — o pool do banco é compartilhado
+> (ajustável por `PG_POOL_MAX`).
 
 ---
 
