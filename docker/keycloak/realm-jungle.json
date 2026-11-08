@@ -3,6 +3,30 @@
   "enabled": true,
   "sslRequired": "none",
   "accessTokenLifespan": 900,
+  "users": [
+    {
+      "username": "jogador1",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Jogador",
+      "lastName": "Um",
+      "email": "jogador1@example.com",
+      "credentials": [
+        { "type": "password", "value": "jogador1", "temporary": false }
+      ]
+    },
+    {
+      "username": "jogador2",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Jogador",
+      "lastName": "Dois",
+      "email": "jogador2@example.com",
+      "credentials": [
+        { "type": "password", "value": "jogador2", "temporary": false }
+      ]
+    }
+  ],
   "clients": [
     {
       "clientId": "wagering-api",
