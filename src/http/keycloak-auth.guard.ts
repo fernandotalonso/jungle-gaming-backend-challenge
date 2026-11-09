@@ -17,9 +17,17 @@ const JWKS_CACHE_SECONDS = 600;
  */
 @Injectable()
 export class KeycloakAuthGuard implements CanActivate {
-  private static jwks = createRemoteJWKSet(new URL(`${process.env.KEYCLOAK_ISSUER}/protocol/openid-connect/certs`), {
-    cooldownDuration: JWKS_CACHE_SECONDS * 1000,
-  });
+  private static jwks = createRemoteJWKSet(
+    new URL(
+      // backchannel pode precisar de um hostname diferente do issuer:
+      // tokens carregam iss=http://localhost:8080 (acessível ao host), mas a
+      // API em container busca o JWKS pelo service name do compose.
+      process.env.KEYCLOAK_JWKS_URL ?? `${process.env.KEYCLOAK_ISSUER}/protocol/openid-connect/certs`,
+    ),
+    {
+      cooldownDuration: JWKS_CACHE_SECONDS * 1000,
+    },
+  );
 
   constructor(private readonly reflector: Reflector) {}
 

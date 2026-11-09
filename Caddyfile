@@ -1,0 +1,12 @@
+:3000 {
+	reverse_proxy {
+		# resolve o nome "api" via DNS do Docker a cada intervalo,
+		# pegando todas as réplicas
+		dynamic a {
+			name api
+			port 3000
+			refresh 5s
+		}
+		lb_policy round_robin
+	}
+}

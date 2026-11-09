@@ -248,7 +248,12 @@ export class SqsWagerTransactionConsumer implements OnApplicationBootstrap, Befo
       const result = await this.submit.executeInTransaction(db, command, {
         correlationId: generateId(),
       });
-      return { duplicate: false, status: result.status, idempotentReplay: result.idempotentReplay };
+      return {
+        duplicate: false,
+        status: result.status,
+        idempotentReplay: result.idempotentReplay,
+        transactionId: result.transactionId,
+      };
     });
   }
 
