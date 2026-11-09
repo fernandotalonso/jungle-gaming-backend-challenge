@@ -81,47 +81,6 @@ services:
       timeout: 5s
       retries: 36
 
-  api:
-    build: .
-    deploy:
-      replicas: 3
-    env_file:
-      - .env.compose
-    healthcheck:
-      # imagem oven/bun: probe com fetch (não há curl garantido na imagem);
-      # porta fixa 3000 = a porta DENTRO do container (não interpolar do host)
-      test:
-        [
-          "CMD",
-          "bun",
-          "-e",
-          "await fetch('http://localhost:3000/health/live').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
-        ]
-      interval: 5s
-      timeout: 3s
-      retries: 6
-    depends_on:
-      postgres:
-        condition: service_healthy
-      localstack:
-        condition: service_healthy
-      keycloak:
-        condition: service_healthy
-
-  proxy:
-    image: caddy:2-alpine
-    container_name: jungle-proxy
-    ports:
-      # - "80:80"
-      # - "443:443"
-      - "3000:3000"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # - caddy_data:/data
-      # - caddy_config:/config
-    depends_on:
-      - api
-
 volumes:
   postgres-data:
   localstack-data:

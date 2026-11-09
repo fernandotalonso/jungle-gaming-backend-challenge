@@ -35,23 +35,45 @@ múltiplas instâncias.
 
 ---
 
-## Quick start
+## Modos de execução
+
+Há duas topologias — escolha **uma** por vez:
+
+### Modo A — infra no Docker, API no host (desenvolvimento)
 
 ```bash
 cp .env.example .env          # defaults locais (senhas de dev)
-docker compose up -d          # PostgreSQL 18, LocalStack (SQS), Keycloak
+docker compose up -d          # SOMENTE infra: PostgreSQL 18, LocalStack, Keycloak
 bun install
 bun run migration:up          # cria o schema (constraints no banco)
-bun run start:dev             # API + consumer SQS + outbox publisher
+bun run start:dev             # API + consumer SQS + outbox publisher (porta do .env)
 ```
 
-Verificação rápida:
+Multi-instância no host (portas 4000/4001/4002):
 
 ```bash
-curl http://localhost:3000/health/live   # {"status":"live"}
-curl http://localhost:3000/health/ready  # postgres + sqs up
-curl http://localhost:8080/realms/jungle # realm Keycloak importado
+bash scripts/instances.sh start 3   # sobe as instâncias
+bash scripts/instances.sh status    # health em cada porta
+bash scripts/instances.sh stop      # para todas
 ```
+
+### Modo B — tudo containerizado (3 réplicas + proxy reverso)
+
+```bash
+cp .env.compose .env 2>/dev/null || true
+docker compose -f docker-compose-proxy.yml up -d --build
+bun run migration:up          # migrations rodam do host contra o PG do compose
+```
+
+- **3 réplicas** da API atrás do **Caddy** na porta **3000** (round-robin via
+  DNS dinâmico do Docker — veja `Caddyfile`).
+- Mesmos workers SQS ativos em todas as réplicas (seguro: lock por wallet +
+  inbox persistente + SKIP LOCKED).
+- Verificação: `curl http://localhost:3000/health/ready`.
+
+> Regra para rodar `bun test`: pare o dev server, as instâncias
+> (`scripts/instances.sh stop`) e o serviço `api`/`proxy` do compose — eles
+> disputam as mesmas filas com as suítes de mensageria.
 
 O realm `jungle` é importado automaticamente pelo Keycloak
 (`docker/keycloak/realm-jungle.json`) e as filas
@@ -64,7 +86,8 @@ do LocalStack (`docker/localstack/init/`).
 
 | Serviço | Porta | Credenciais de dev |
 |---|---|---|
-| API (NestJS) | 3000 | — |
+| API (NestJS) | 3000 (host, modo A — segue `APP_PORT`) ou via Caddy :3000 (modo B) | — |
+| Caddy (proxy, modo B) | 3000 | — |
 | PostgreSQL 18 | 5432 | `jungle` / `jungle` / db `jungle_wagering` |
 | LocalStack (SQS) | 4566 | chave AWS dummy (`test`/`test`) |
 | Keycloak | 8080 | admin `admin`/`admin`; client `wagering-api` secret `local-dev-api-secret` |
@@ -105,6 +128,22 @@ Use o `access_token` no header `Authorization: Bearer <token>`.
 | `bun run migration:create` | gera migration (diff das entities) |
 | `bun run migration:up` / `migration:down` | aplica/reverte migrations |
 | `bun run migration:list` | lista migrations aplicadas |
+
+### Scripts auxiliares (`scripts/`)
+
+| Script | Descrição |
+|---|---|
+| `curl-wallets.sh` | fluxo manual em curl: token → wallet → BET → ledger → reconciliação |
+| `curl-scorecard.sh` | **scorecard de aceitação via API** espelhando a pontuação do CHALLENGE (seção 14): financeira 20, concorrência 20, idempotência 15, mensageria 15, observabilidade 5 + checagens eliminatórias |
+| `test-challenge.sh` | suíte manual estendida do provedor (multi-instância via `INSTANCES`, checagens SQL via `PSQL_CMD`, filas via `ENABLE_SQS=1`; usa `jq`) |
+| `instances.sh` | sobe/para/status de N instâncias no host (portas 4000..N) |
+
+Exemplos:
+
+```bash
+bash scripts/curl-scorecard.sh                                   # API na porta do .env
+BASE=http://localhost:3000 INSTANCES="http://localhost:4000 http://localhost:4001 http://localhost:4002" bash scripts/test-challenge.sh
+```
 
 > As suítes `integration`, `e2e` e `concurrency` exigem o
 > `docker compose up -d` ativo e o **`bun run start:dev` PARADO** — o dev

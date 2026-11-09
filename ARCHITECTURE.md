@@ -316,9 +316,64 @@ Contagem atual: **197 testes** (unit + integration + e2e + concurrency), todos
 contra PostgreSQL e LocalStack reais onde há infraestrutura envolvida —
 nenhuma suíte substitui banco ou fila por mocks.
 
+Camada manual (scripts/curl-scorecard.sh, scripts/curl-wallets.sh,
+scripts/test-challenge.sh): espelha os mesmos critérios via HTTP/curl para
+aceitação humana — o scorecard imprime a pontuação por área do CHALLENGE 14.
+
 ---
 
-## 4. Limitações e não-escopo
+## 4. Topologias de deployment
+
+Dois arquivos de compose, **escolha um por vez** (mesmo project name
+`jungle-wagering`):
+
+| Arquivo | Conteúdo | Uso |
+|---|---|---|
+| `docker-compose.yml` | **só infra**: PostgreSQL, LocalStack, Keycloak | desenvolvimento com a API no host (`bun run start:dev`) e para rodar as suítes |
+| `docker-compose-proxy.yml` | **stack completo**: infra + API (3 réplicas) + Caddy | demonstração multi-instância containerizada |
+
+### API containerizada (`docker-compose-proxy.yml`)
+
+- 3 réplicas (`deploy.replicas`) sem `container_name`; o Caddy resolve o
+  service name `api` via DNS dinâmico do Docker (`dynamic a`, refresh 5s) e
+  balanceia com round-robin — réplica nova entra no pool sem reload.
+- **Environment**: `.env.compose` injetado via `env_file` **e** copiado como
+  `.env` na imagem (o Bun auto-carrega; um arquivo chamado `env` nunca é
+  lido — causa raiz de um boot quebrado). Variáveis de processo (env_file)
+  vencem o arquivo.
+- **Hostnames** (o ponto mais sensível ao containerizar):
+  - `DATABASE_URL` e `SQS_ENDPOINT` usam service names (`postgres`,
+    `localstack`);
+  - filas SQS usam **URLs path-style** com service name
+    (`http://localstack:4566/000000000000/wager-transactions.fifo`) —
+    verificado que o LocalStack com `SQS_ENDPOINT_STRATEGY=standard` aceita
+    path-style de qualquer hostname;
+  - `KEYCLOAK_ISSUER=http://localhost:8080/realms/jungle` (fixo via
+    `KC_HOSTNAME=localhost`): tokens mintados do **host** e **da rede** saem
+    com o mesmo issuer;
+  - `KEYCLOAK_JWKS_URL=http://keycloak:8080/...` (override suportado pelo
+    guard): o backchannel de JWKS usa o service name — dentro da rede
+    `localhost:8080` não resolve para o Keycloak.
+- **Healthchecks**: a imagem oven/bun não tem curl garantido → probe com
+  `bun -e "fetch(...)"`; a porta do probe é a **interna** (3000), fixa no
+  arquivo — não interpolar do `.env` do host, cujo valor pode ser outro.
+- **Migrations não rodam no container**: aplicadas do host
+  (`bun run migration:up`) contra o PostgreSQL publicado em 5432. O container
+  assume o schema existente (boot lazy, sem conexão até o primeiro uso).
+- PostgreSQL com `max_connections=300`: o `bun test` roda todas as suítes em
+  um único processo compartilhando um pool; N instâncias + suítes paralelas
+  precisam de folga.
+
+### Regra de convivência com os testes
+
+Consumer/publisher ativos disputam as filas com as suítes de mensageria.
+Antes de `bun test`: parar dev server, `scripts/instances.sh stop` e
+`docker compose [-f docker-compose-proxy.yml] stop api proxy`. As mensagens
+em voo permanecem nas filas e são processadas quando os workers voltam.
+
+---
+
+## 5. Limitações e não-escopo
 
 - **Moeda operacional única (BRL)**, conforme permitido pelo enunciado: o
   modelo é multi-moeda (`Money` multi-moeda, unique por moeda, conflito de
@@ -335,7 +390,7 @@ nenhuma suíte substitui banco ou fila por mocks.
 
 ---
 
-## 5. Pontos de extensão
+## 6. Pontos de extensão
 
 - `KeycloakAuthGuard` / `@Public()` — troca ou desativação do mecanismo de auth.
 - Ports (`WalletRepository`, `LedgerRepository`, `WagerTransactionRepository`,
